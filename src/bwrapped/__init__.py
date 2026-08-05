@@ -515,7 +515,7 @@ def parse_wrapper_args(args: Sequence[str]) -> WrapperArgs:
                     parsed_args.command_args.extend(args[index + 2 :])
                     break
                 else:
-                    raise MissingCommandError("Missing command.")
+                    raise MissingCommandError
             elif arg.startswith("--workspace="):
                 parsed_args.workspace = os.path.expanduser(
                     arg.removeprefix("--workspace=")
@@ -535,13 +535,13 @@ def parse_wrapper_args(args: Sequence[str]) -> WrapperArgs:
                 break
             index += 1
         if not parsed_args.command and not parsed_args.show_help:
-            raise MissingCommandError("Missing command.")
+            raise MissingCommandError
 
     except InvalidCliArgError as e:
-        print(f"Invalid CLI argument: {e}")
+        logging.getLogger().error(f"Invalid CLI argument: {e}")
         parsed_args.show_help = True
     except MissingCommandError as e:
-        print(e)
+        logging.getLogger().error("Command not provided.")
         parsed_args.show_help = True
 
     return parsed_args
@@ -564,8 +564,26 @@ Wrapper options:
 
 def main() -> int:
     """Build and execute the sandboxed OpenCode command."""
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.WARNING)
+
+    logFormatter = logging.Formatter(
+        fmt="[{asctime}] [{levelname}] [{name}]: {message}",
+        style="{",
+    )
+
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(logFormatter)
+    stderr_handler.setLevel(logging.DEBUG)
+    logger.addHandler(stderr_handler)
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(logFormatter)
+    stdout_handler.setLevel(logging.WARNING)
+    logger.addHandler(stdout_handler)
+
     wrapper_args = parse_wrapper_args(sys.argv[1:])
-    logger = logging.getLogger(__name__)
     logger.debug(wrapper_args)
     if wrapper_args.show_help:
         print(_wrapper_help())
@@ -580,11 +598,11 @@ def main() -> int:
             command_args=wrapper_args.command_args,
             allow_dangerous_workspace=wrapper_args.allow_dangerous_workspace,
         ).bwrapped_command()
-        logging.getLogger().debug("Command:\n" + " ".join(command))
+        logger.debug("Command:\n" + " ".join(command))
+        os.execvp(command[0], command[1:])
+
     except DangerousWorkspaceError:
         raise RuntimeError("Please run with --allow-dangerous-workspace")
-
-    os.execvp(command[0], command[1:])
 
 
 if __name__ == "__main__":
