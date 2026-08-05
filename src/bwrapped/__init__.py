@@ -540,7 +540,7 @@ def parse_wrapper_args(args: Sequence[str]) -> WrapperArgs:
     except InvalidCliArgError as e:
         logging.getLogger().error(f"Invalid CLI argument: {e}")
         parsed_args.show_help = True
-    except MissingCommandError as e:
+    except MissingCommandError:
         logging.getLogger().error("Command not provided.")
         parsed_args.show_help = True
 
