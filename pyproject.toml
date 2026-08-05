@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "bwrapped"
 version = "0.1.0"
-description = "Add your description here"
+description = "Bubblewrap helper with sane defaults"
 readme = "README.md"
 requires-python = ">=3.14"
 scripts = { bwrapped = "bwrapped:main" }
