@@ -4,7 +4,7 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import product
 from pathlib import Path
 from typing import Self
@@ -159,15 +159,6 @@ class BindMount:
 
 
 type Mount = BindMount | DirectoryMount | TmpfsMount
-
-
-@dataclass(slots=True)
-class WrapperArgs:
-    command: str | None
-    command_args: list[str]
-    workspace: str | None
-    allow_dangerous_workspace: bool
-    show_help: bool
 
 
 @dataclass(slots=True)
@@ -468,6 +459,7 @@ class BWrapper:
         return self
 
     def add_to_path(self, path: os.PathLike | str) -> Self:
+        # TODO: make this safe
         if "PATH" not in os.environ:
             return self
 
@@ -496,49 +488,63 @@ def get_executable(cmd: str) -> str:
     return str(Path(path))
 
 
+@dataclass(slots=True)
+class WrapperArgs:
+    command: str | None = None
+    command_args: list[str] = field(default_factory=list)
+    workspace: str | None = None
+    allow_dangerous_workspace: bool = False
+    show_help: bool = False
+
+
 def parse_wrapper_args(args: Sequence[str]) -> WrapperArgs:
     """Separate wrapper options from arguments intended for OpenCode."""
-    allow_dangerous_workspace = False
-    workspace: str | None = None
-    show_help = not len(args) > 0
-    command: str | None = None
-    command_args: list[str] = []
+    parsed_args = WrapperArgs()
 
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if arg == "--":
+    class InvalidCliArgError(Exception): ...
+
+    class MissingCommandError(Exception): ...
+
+    try:
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--":
+                if index + 1 < len(args):
+                    parsed_args.command = args[index + 1]
+                    parsed_args.command_args.extend(args[index + 2 :])
+                    break
+                else:
+                    raise MissingCommandError("Missing command.")
+            elif arg.startswith("--workspace="):
+                parsed_args.workspace = os.path.expanduser(
+                    arg.removeprefix("--workspace=")
+                )
+            elif arg == "--allow-dangerous-workspace":
+                parsed_args.allow_dangerous_workspace = True
+            elif arg == "--help" or arg == "-h":
+                parsed_args.show_help = True
+            elif arg == "--verbose" or arg == "-v":
+                logger = logging.getLogger()
+                logger.setLevel(logging.DEBUG)
+                stderr_handler = logging.StreamHandler(sys.stderr)
+                stderr_handler.setLevel(logging.DEBUG)
+                logger.addHandler(stderr_handler)
+            else:
+                raise InvalidCliArgError(arg)
+                break
             index += 1
-            break
-        elif arg.startswith("--workspace="):
-            workspace = os.path.expanduser(arg.removeprefix("--workspace="))
-        elif arg == "--allow-dangerous-workspace":
-            allow_dangerous_workspace = True
-        elif arg == "--help" or arg == "-h":
-            show_help = True
-        elif arg == "--verbose" or arg == "-v":
-            logger = logging.getLogger()
-            logger.setLevel(logging.DEBUG)
-            stderr_handler = logging.StreamHandler(sys.stderr)
-            stderr_handler.setLevel(logging.DEBUG)
-            logger.addHandler(stderr_handler)
-        else:
-            break
-        index += 1
+        if not parsed_args.command and not parsed_args.show_help:
+            raise MissingCommandError("Missing command.")
 
-    if index == len(args):
-        show_help = True
-    else:
-        command = args[index]
-        command_args.extend(args[index + 1 :])
+    except InvalidCliArgError as e:
+        print(f"Invalid CLI argument: {e}")
+        parsed_args.show_help = True
+    except MissingCommandError as e:
+        print(e)
+        parsed_args.show_help = True
 
-    return WrapperArgs(
-        command=command,
-        workspace=workspace,
-        command_args=command_args,
-        allow_dangerous_workspace=allow_dangerous_workspace,
-        show_help=show_help,
-    )
+    return parsed_args
 
 
 def _wrapper_help() -> str:
@@ -559,7 +565,8 @@ Wrapper options:
 def main() -> int:
     """Build and execute the sandboxed OpenCode command."""
     wrapper_args = parse_wrapper_args(sys.argv[1:])
-    logging.getLogger(__name__).debug(wrapper_args)
+    logger = logging.getLogger(__name__)
+    logger.debug(wrapper_args)
     if wrapper_args.show_help:
         print(_wrapper_help())
         return 0
@@ -577,7 +584,6 @@ def main() -> int:
     except DangerousWorkspaceError:
         raise RuntimeError("Please run with --allow-dangerous-workspace")
 
-    # return 0
     os.execvp(command[0], command[1:])
 
 
