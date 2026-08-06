@@ -1,4 +1,11 @@
-# TODO: docstring
+"""Construct and run commands in a Linux Bubblewrap sandbox.
+
+The mount classes describe Bubblewrap filesystem arguments, while :class:`BWrapper`
+assembles an isolated environment around a command and workspace. The :func:`main`
+entry point provides the ``bwrapped`` command-line interface and replaces the current
+process with Bubblewrap unless invoked in dry-run mode.
+"""
+
 import os
 import shutil
 import sys
@@ -64,18 +71,33 @@ DEFAULT_DIRECTORY_MODE = "rwx------"
 
 
 class DangerousWorkspaceError(Exception):
-	"""Overly broad or sensitive workspace."""
+	"""Indicate that a workspace would require a dangerous writable bind.
+
+	A workspace already covered by a writable mount is accepted. Otherwise, BWrapper
+	raises this exception for broad or sensitive locations unless dangerous workspaces
+	are explicitly allowed.
+	"""
 
 
 class SandboxOnlyMount:
-	"""Base class for a persistent or non-persistent directory in the sandbox."""
+	"""Represent a destination-only directory or tmpfs mount in the sandbox."""
 
 	__slots__ = ("_dest", "_mode")
 	_dest: Path
 	_mode: int
 
 	def __init__(self, dest: os.PathLike | str, mode: int | str = DEFAULT_DIRECTORY_MODE) -> None:
-		"""Create a directory in the sandbox with a given destination and permission mode."""
+		"""Configure a destination-only mount and its permission mode.
+
+		Args:
+			dest: Path at which Bubblewrap creates the mount in the sandbox.
+			mode: Symbolic mode from ``FILE_MODES`` or an integer contained in its values.
+				Unrecognized modes, including a symbolic mode whose value is zero, silently
+				fall back to ``DEFAULT_DIRECTORY_MODE``.
+
+		This constructor only records the mount configuration; it does not invoke
+		Bubblewrap or create anything on the host.
+		"""
 		self._dest = Path(dest)
 		self._mode = FILE_MODES[DEFAULT_DIRECTORY_MODE]
 		if isinstance(mode, str) and (mode_int := FILE_MODES.get(mode)):
@@ -84,15 +106,19 @@ class SandboxOnlyMount:
 			self._mode = mode
 
 	def dest(self) -> Path:
-		"""Destination of the mount."""
+		"""Return the configured sandbox destination as a path."""
 		return Path(self._dest)
 
 
 class DirectoryMount(SandboxOnlyMount):
-	"""Persistent directory in the sandbox."""
+	"""Represent an ordinary directory created in the sandbox filesystem."""
 
 	def args(self) -> list[str]:
-		"""Return the bubblewrap arguments that create the sandbox directory."""
+		"""Return ``--perms MODE --dir DEST`` arguments for Bubblewrap.
+
+		The mode is rendered as a four-digit octal value. The resulting directory
+		contains no host files and exists only as part of the sandbox filesystem.
+		"""
 		return ["--perms", f"{self._mode:04o}", "--dir", str(self._dest)]
 
 	def __repr__(self) -> str:
@@ -100,10 +126,13 @@ class DirectoryMount(SandboxOnlyMount):
 
 
 class TmpfsMount(SandboxOnlyMount):
-	"""Memory-backed non-persistent directory in the sandbox."""
+	"""Represent an empty, memory-backed tmpfs mounted in the sandbox."""
 
 	def args(self) -> list[str]:
-		"""Return the bubblewrap arguments that mount the private tmpfs."""
+		"""Return ``--perms MODE --tmpfs DEST`` arguments for Bubblewrap.
+
+		The mode is rendered as a four-digit octal value.
+		"""
 		return ["--perms", f"{self._mode:04o}", "--tmpfs", str(self._dest)]
 
 	def __repr__(self) -> str:
@@ -112,7 +141,7 @@ class TmpfsMount(SandboxOnlyMount):
 
 @dataclass(slots=True)
 class BindMount:
-	"""Host directory mounted inside the sandbox."""
+	"""Represent a host path bound to a destination in the sandbox."""
 
 	_src: Path
 	_dest: Path
@@ -120,45 +149,69 @@ class BindMount:
 	_read_only: bool
 
 	def __init__(self, src: os.PathLike | str, dest: os.PathLike | str | None = None) -> None:
-		"""Mount <src> in the host to <dest> inside in the sandbox."""
+		"""Configure a writable host-to-sandbox bind mount.
+
+		Args:
+			src: Host path to expose in the sandbox.
+			dest: Sandbox destination. An omitted or otherwise false value uses ``src``.
+
+		The source is not checked for existence or restricted to a directory. This
+		constructor only records configuration; Bubblewrap performs the eventual mount.
+		Missing sources are errors by default unless :meth:`ignore_missing` is enabled.
+		"""
 		self._src = Path(src)
 		self._dest = Path(dest or src)
 		self._ignore_missing = False
 		self._read_only = False
 
 	def ro(self) -> Self:
-		"""Make the bind-mount read-only."""
+		"""Make this bind mount read-only and return it for method chaining."""
 		self._read_only = True
 		return self
 
 	def rw(self) -> Self:
-		"""Make the bind-mount writeable."""
+		"""Make this bind mount writable and return it for method chaining."""
 		self._read_only = False
 		return self
 
 	def is_ro(self) -> bool:
-		"""Return true if the bind is read-only."""
+		"""Return whether this mount emits a read-only bind option."""
 		return self._read_only
 
 	def src(self) -> Path:
-		"""Get source of the bind."""
+		"""Return the configured host source as a path."""
 		return Path(self._src)
 
 	def dest(self) -> Path:
-		"""Destination of the bind."""
+		"""Return the configured sandbox destination as a path."""
 		return Path(self._dest)
 
 	def ignore_missing(self, *, ignore: bool = True) -> Self:
-		"""Control whether the bind-mount is a noop if the source is inaccessible."""
+		"""Select whether to emit a Bubblewrap try-bind option.
+
+		Args:
+			ignore: If true, use ``--bind-try`` or ``--ro-bind-try`` instead of the
+				corresponding regular bind option.
+
+		Returns:
+			This mount, for method chaining.
+		"""
 		self._ignore_missing = ignore
 		return self
 
 	def is_try(self) -> bool:
-		"""Return true if the bind should fail gracefully when the source is inaccessible."""
+		"""Return whether this mount emits a Bubblewrap try-bind option."""
 		return self._ignore_missing
 
 	def args(self) -> list[str]:
-		"""Return the bubblewrap arguments for this bind mount."""
+		"""Return the Bubblewrap option, host source, and sandbox destination.
+
+		The option is ``--bind`` or ``--ro-bind`` according to the access mode and
+		gains the ``-try`` suffix when missing sources should be ignored.
+
+		Raises:
+			RuntimeError: If the mount's destination was not initialized.
+		"""
 		option = "--ro-bind" if self._read_only else "--bind"
 		if self._ignore_missing:
 			option += "-try"
@@ -173,7 +226,12 @@ type Mount = BindMount | DirectoryMount | TmpfsMount
 
 @dataclass(slots=True)
 class BWrapper:
-	"""Manipulates and builds the bwrap command incrementally."""
+	"""Build a Bubblewrap command around a host command and workspace.
+
+	Initialization configures namespace isolation, system and XDG mounts, temporary
+	directories, environment variables, the executable search path, and workspace
+	access. Constructing an instance does not run Bubblewrap.
+	"""
 
 	command: str
 	command_args: tuple[str, ...]
@@ -196,7 +254,29 @@ class BWrapper:
 		workspace_dir: os.PathLike | None = None,
 		allow_dangerous_workspace: bool = False,
 	) -> None:
-		# TODO: docstring
+		"""Configure a sandbox command, workspace, mounts, and environment.
+
+		Args:
+			*command_with_args: Command followed by its arguments. If empty, use the
+				value of ``SHELL``, or ``sh`` when that value is empty.
+			workspace_dir: Existing directory in which the sandboxed command starts.
+				Defaults to the current directory and is resolved to a canonical path.
+			allow_dangerous_workspace: Allow a new writable bind for an overly broad or
+				sensitive workspace.
+
+		Raises:
+			KeyError: If ``SHELL`` is absent from the host environment.
+			FileNotFoundError: If ``workspace_dir`` does not exist.
+			NotADirectoryError: If ``workspace_dir`` is not a directory.
+			DangerousWorkspaceError: If the workspace requires a dangerous writable bind
+				and ``allow_dangerous_workspace`` is false.
+			OSError: If a path cannot be resolved or a per-user host temporary directory
+				cannot be created.
+
+		The setup creates ``bwrapped-UID`` directories below the host temporary directory
+		and ``/var/tmp`` when needed. It only assembles configuration and does not invoke
+		Bubblewrap.
+		"""
 		command = os.environ["SHELL"] or "sh"
 		if len(command_with_args) > 0:
 			command = command_with_args[0]
@@ -228,6 +308,7 @@ class BWrapper:
 		self._add_workspace()
 
 	def _add_system_dirs(self) -> Self:
+		"""Add isolated runtime storage and optional read-only system mounts."""
 		self._mounts.extend(
 			[
 				TmpfsMount("/run", FILE_MODES["rwxr-xr-x"]),
@@ -270,6 +351,7 @@ class BWrapper:
 		return self._add_tmp_roots()
 
 	def _add_tmp_roots(self) -> Self:
+		"""Create and bind per-user host directories for sandbox temporary storage."""
 		# The current environment equivalent for "/tmp"
 		# Guaranteed to exist and be writeable, or be equal to the cwd
 		host_tmp = tempfile.gettempdir()
@@ -284,6 +366,7 @@ class BWrapper:
 		return self
 
 	def _add_base_env_vars(self) -> Self:
+		"""Copy selected host variables and add defaults to the sandbox environment."""
 		variables = {
 			"USER": os.getenv("USER"),
 			"LOGNAME": os.getenv("LOGNAME"),
@@ -298,6 +381,7 @@ class BWrapper:
 		return self
 
 	def _add_xdg_base_dirs(self) -> Self:
+		"""Configure sandbox directories, mounts, and variables for the XDG layout."""
 		# Note: Path.home() returns os.path.expanduser("~"), which expands $HOME if it is set.
 		# Therefore the following is consistent.
 		self._mounts.append(DirectoryMount(self._home_dir))
@@ -341,6 +425,7 @@ class BWrapper:
 		return self
 
 	def _add_base_path_dirs(self) -> Self:
+		"""Populate sandbox ``PATH`` with recognized, existing host directories."""
 		if "PATH" not in os.environ:
 			return self
 
@@ -369,6 +454,15 @@ class BWrapper:
 		return self
 
 	def _add_workspace(self) -> Self:
+		"""Ensure the workspace is covered by an allowed writable mount.
+
+		Returns:
+			This wrapper after retaining an existing writable mount or adding a new one.
+
+		Raises:
+			DangerousWorkspaceError: If a new bind would expose a broad or sensitive
+				workspace and dangerous workspaces are not allowed.
+		"""
 		self.workspace_dir = self.workspace_dir
 		effective_parent_mount: Mount | None = None
 		for mount in self._mounts[-1::-1]:
@@ -400,12 +494,14 @@ class BWrapper:
 		return self
 
 	def _mount_args(self) -> list[str]:
+		"""Return all configured mount arguments in insertion order."""
 		args: list[str] = []
 		for mount in self._mounts:
 			args.extend(mount.args())
 		return args
 
 	def _env_args(self) -> list[str]:
+		"""Return ``--setenv`` arguments for the configured sandbox environment."""
 		args: list[str] = []
 		for var, value in self._env.items():
 			args.extend(["--setenv", var, value])
@@ -413,6 +509,7 @@ class BWrapper:
 
 	@staticmethod
 	def _base_args() -> list[str]:
+		"""Return the fixed namespace, process, network, device, and proc arguments."""
 		return [
 			"--unshare-all",
 			"--unshare-user",
@@ -430,7 +527,17 @@ class BWrapper:
 		]
 
 	def bwrapped_command(self) -> list[str]:
-		"""Build the bubblewrap command prefix for the configured sandbox."""
+		"""Build the complete Bubblewrap command argument vector.
+
+		The result contains the ``bwrap`` executable, isolation settings, mounts,
+		environment, workspace, located command path, and original command arguments.
+
+		Returns:
+			Arguments suitable for starting Bubblewrap.
+
+		Raises:
+			RuntimeError: If the configured command cannot be found.
+		"""
 		executable = get_executable(self.command)
 		return [
 			"bwrap",
@@ -444,12 +551,26 @@ class BWrapper:
 		]
 
 	def set_env_vars(self, variables: dict[str, str]) -> Self:
-		"""Add or replace environment variables in the sandbox."""
+		"""Update the configured sandbox environment and return this wrapper.
+
+		Args:
+			variables: Names and values to add. Existing configured names are replaced.
+
+		This method does not modify the host's ``os.environ`` mapping.
+		"""
 		self._env |= variables
 		return self
 
 	def expose_application_xdg_dirs(self, app: str) -> Self:
-		"""Expose host xdg directories for a specific application inside the sandbox."""
+		"""Expose existing host XDG directories for an application.
+
+		Args:
+			app: Path joined to each configured XDG home to locate application data.
+
+		Returns:
+			This wrapper after adding mounts for directories that exist. Configuration is
+			mounted read-only; state, cache, and data are mounted writable.
+		"""
 		for xdg_dir, ro in [
 			(self._xdg_config_home, True),
 			(self._xdg_state_home, False),
@@ -466,7 +587,20 @@ class BWrapper:
 		return self
 
 	def add_to_path(self, path: os.PathLike | str) -> Self:
-		"""Add a path to the sandbox PATH env variable."""
+		"""Prepend an existing host directory to the sandbox executable path.
+
+		Args:
+			path: Directory to expose through a read-only bind and prepend to ``PATH``.
+
+		Returns:
+			This wrapper. It is returned unchanged when the host has no ``PATH`` or
+			``path`` is false.
+
+		Raises:
+			FileNotFoundError: If ``path`` does not exist.
+			NotADirectoryError: If ``path`` is not a directory.
+			OSError: If ``path`` cannot be resolved.
+		"""
 		if "PATH" not in os.environ:
 			return self
 
@@ -489,16 +623,43 @@ class BWrapper:
 
 
 def get_executable(cmd: str) -> str:
-	"""Resolve an executable to an absolute path or raise an error."""
+	"""Locate an executable using :func:`shutil.which`.
+
+	Args:
+		cmd: Executable name or path to locate using the host environment.
+
+	Returns:
+		The path reported by :func:`shutil.which`, resolved to an absolute path.
+		Symlinks are resolved and '..' components in the path are normalized.
+
+	Raises:
+		RuntimeError: If no executable is found.
+	"""
 	path = shutil.which(cmd)
 	if path is None:
 		err_msg = f"Could not find '{cmd}'."
 		raise RuntimeError(err_msg)
-	return str(Path(path))
+	return str(Path(path).resolve(strict=True))
 
 
 def main() -> int:
-	"""Build and execute the sandboxed command."""
+	"""Parse CLI arguments and run the requested command through Bubblewrap.
+
+	The CLI accepts verbose and dry-run output, a workspace override, and the
+	``--allow-dangerous_workspace`` override. Dry-run mode writes the generated command
+	to standard output without a trailing newline and returns zero. Otherwise this
+	function calls :func:`os.execvp`; successful execution replaces the current process
+	and does not return. Verbose mode writes the command before that replacement.
+
+	Returns:
+		Zero after a dry run, or if process replacement unexpectedly returns.
+
+	Raises:
+		SystemExit: If option parsing fails or no command is supplied.
+		KeyError: If ``SHELL`` is absent from the host environment.
+		RuntimeError: If the workspace is rejected or the command cannot be found.
+		OSError: If sandbox setup or process replacement fails.
+	"""
 	argparser = OptionParser()
 	argparser.disable_interspersed_args()
 	argparser.add_option("-v", "--verbose", action="store_true", help="Show the generated command")
