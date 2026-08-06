@@ -1,3 +1,4 @@
+# TODO: docstring
 import os
 import shutil
 import sys
@@ -175,7 +176,7 @@ class BWrapper:
 	"""Manipulates and builds the bwrap command incrementally."""
 
 	command: str
-	command_args: list[str]
+	command_args: tuple[str, ...]
 	workspace_dir: Path
 	allow_dangerous_workspace: bool
 	_env: dict[str, str]
@@ -191,16 +192,15 @@ class BWrapper:
 
 	def __init__(
 		self,
-		command: str | None = None,
-		command_args: list[str] | None = None,
-		*,
+		*command_with_args: str,
 		workspace_dir: os.PathLike | None = None,
 		allow_dangerous_workspace: bool = False,
 	) -> None:
-		if not command:
-			command = os.environ["SHELL"] or "sh"
-		if command_args is None:
-			command_args = []
+		# TODO: docstring
+		command = os.environ["SHELL"] or "sh"
+		if len(command_with_args) > 0:
+			command = command_with_args[0]
+		command_args = command_with_args[1:]
 		if not workspace_dir:
 			workspace_dir = Path.cwd()
 		self.command = command
@@ -467,7 +467,6 @@ class BWrapper:
 
 	def add_to_path(self, path: os.PathLike | str) -> Self:
 		"""Add a path to the sandbox PATH env variable."""
-		# TODO: make this safe
 		if "PATH" not in os.environ:
 			return self
 
@@ -519,17 +518,14 @@ def main() -> int:
 		help="Do not run the command. Implies --verbose.",
 	)
 
-	(options, args) = argparser.parse_args()
-	if len(args) == 0:
+	(options, command_with_args) = argparser.parse_args()
+	if len(command_with_args) == 0:
 		argparser.error("No command specified.")
 		return 1
-	command = args[0]
-	command_args = args[1:]
 
 	try:
 		command = BWrapper(
-			command=command,
-			command_args=command_args,
+			*command_with_args,
 			workspace_dir=Path(options.workspace) if options.workspace else None,
 			allow_dangerous_workspace=options.allow_dangerous_workspace,
 		).bwrapped_command()
