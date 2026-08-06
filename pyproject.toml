@@ -5,8 +5,41 @@ build-backend = "uv_build"
 [project]
 name = "bwrapped"
 version = "0.1.0"
-description = "Bubblewrap helper with sane defaults"
+description = "Bubblewrap helper with simple defaults"
 readme = "README.md"
 requires-python = ">=3.14"
 scripts = { bwrapped = "bwrapped:main" }
 dependencies = ["xdg-base-dirs~=6.0"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.format]
+indent-style = "tab"
+docstring-code-format = true
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+	# General
+	"CPY",     # flake8-copyright/missing-copyright-notice: requires cpyright notices within each Python file
+	"ERA",     # eradicate: disallows commented code
+	"W191",    # pycodestyle/tab-indentation: disallows tab indentation
+	"D206",    # pydocstyle/docstring-tab-indentation: disallows tab indentation in docstring
+	"E111",    # pycodestyle/indentation-with-invalid-multiple: forces indentation to be a multiple of 4 spaces
+	"E114",    # pycodestyle/indentation-with-invalid-multiple-comment: same as above for comments
+	"E117",    # pycodestyle/over-indented: disallows more than 4 spaces of indentation
+	"D203",    # pydocstyle/incorrect-blank-line-before-class: requires blank line before class docstring
+	"PLR0913", # pylint/too-many-arguments: too many arguments in function signature
+	"PYI021",  # flake8-pyi/docstring-in-stub: disallows docstrings in stub files (not good for extension modules)
+	"TD003",   # flake8-todos/missing-todo-link: disallows todos without an issue link
+	"ANN401",  # flake8-annotations/any-type: disallows type 'Any' in function signatures
+	"ANN003",  # flake8-annotations/missing-type-kwargs: disallows missing types for keyword args dictionary
+	"FIX002",  # flake8-fixme/line-contains-todo: checks for TODO comments
+	# Project-specific
+	"S108", # flake8-bandit/hardcoded-temp-file: disallows "/tmp", "/var/tmp" and similar
+]
+pydocstyle.convention = "pep257"
+flake8-annotations.allow-star-arg-any = true
+flake8-implicit-str-concat.allow-multiline = true
