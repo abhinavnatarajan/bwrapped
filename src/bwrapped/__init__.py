@@ -498,7 +498,7 @@ def get_executable(cmd: str) -> str:
 
 
 def main() -> int:
-	"""Build and execute the sandboxed OpenCode command."""
+	"""Build and execute the sandboxed command."""
 	argparser = OptionParser()
 	argparser.disable_interspersed_args()
 	argparser.add_option("-v", "--verbose", action="store_true", help="Show the generated command")
