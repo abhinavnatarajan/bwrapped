@@ -17,7 +17,7 @@ line-length = 100
 [tool.ruff.format]
 indent-style = "tab"
 docstring-code-format = true
-skip-magic-trailing-comma = true
+skip-magic-trailing-comma = false
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -39,7 +39,20 @@ ignore = [
 	"FIX002",  # flake8-fixme/line-contains-todo: checks for TODO comments
 	# Project-specific
 	"S108", # flake8-bandit/hardcoded-temp-file: disallows "/tmp", "/var/tmp" and similar
+	"S606", # flake8-bandit/start-process-with-no-shell: disallows starting processes directly
+	"D105", # pydocstyle/undocumented-magic-method: disallows undocumented dunder methods
 ]
-pydocstyle.convention = "pep257"
-flake8-annotations.allow-star-arg-any = true
-flake8-implicit-str-concat.allow-multiline = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+
+[tool.ruff.lint.flake8-implicit-str-concat]
+allow-multiline = true
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+split-on-trailing-comma = false

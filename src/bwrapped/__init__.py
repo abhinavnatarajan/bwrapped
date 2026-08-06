@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass
 from itertools import product
@@ -53,27 +54,33 @@ DANGEROUS_CWD_PATHS = {
 FILE_MODES: dict[str, int] = {
 	f"{a[0]}{b[0]}{c[0]}": 0o100 * a[1] + 0o10 * b[1] + c[1]
 	for (a, b, c) in product(
-		[("---", 0), ("r--", 0o4), ("r-x", 0o5), ("rw-", 0o6), ("rwx", 0o7)], repeat=3,
+		[("---", 0), ("r--", 0o4), ("r-x", 0o5), ("rw-", 0o6), ("rwx", 0o7)],
+		repeat=3,
 	)
 }
-DEFAULT_FILE_MODE = FILE_MODES["rw----r--"]
-DEFAULT_DIRECTORY_MODE = FILE_MODES["rwx------"]
+DEFAULT_FILE_MODE = "rw----r--"
+DEFAULT_DIRECTORY_MODE = "rwx------"
 
 
-class DangerousWorkspaceError(Exception): ...
+class DangerousWorkspaceError(Exception):
+	"""Overly broad or sensitive workspace."""
 
 
 class SandboxOnlyMount:
+	"""Base class for a persistent or non-persistent directory in the sandbox."""
+
 	__slots__ = ("_dest", "_mode")
 	_dest: Path
 	_mode: int
 
 	def __init__(self, dest: os.PathLike | str, mode: int | str = DEFAULT_DIRECTORY_MODE) -> None:
+		"""Create a directory in the sandbox with a given destination and permission mode."""
 		self._dest = Path(dest)
-		if isinstance(mode, str):
-			self._mode = FILE_MODES.get(mode, DEFAULT_DIRECTORY_MODE)
-		else:
-			self._mode = mode if mode in FILE_MODES.values() else DEFAULT_DIRECTORY_MODE
+		self._mode = FILE_MODES[DEFAULT_DIRECTORY_MODE]
+		if isinstance(mode, str) and (mode_int := FILE_MODES.get(mode)):
+			self._mode = mode_int
+		elif isinstance(mode, int) and mode in FILE_MODES.values():
+			self._mode = mode
 
 	def dest(self) -> Path:
 		"""Destination of the mount."""
@@ -81,6 +88,8 @@ class SandboxOnlyMount:
 
 
 class DirectoryMount(SandboxOnlyMount):
+	"""Persistent directory in the sandbox."""
+
 	def args(self) -> list[str]:
 		"""Return the bubblewrap arguments that create the sandbox directory."""
 		return ["--perms", f"{self._mode:04o}", "--dir", str(self._dest)]
@@ -90,6 +99,8 @@ class DirectoryMount(SandboxOnlyMount):
 
 
 class TmpfsMount(SandboxOnlyMount):
+	"""Memory-backed non-persistent directory in the sandbox."""
+
 	def args(self) -> list[str]:
 		"""Return the bubblewrap arguments that mount the private tmpfs."""
 		return ["--perms", f"{self._mode:04o}", "--tmpfs", str(self._dest)]
@@ -100,12 +111,15 @@ class TmpfsMount(SandboxOnlyMount):
 
 @dataclass(slots=True)
 class BindMount:
+	"""Host directory mounted inside the sandbox."""
+
 	_src: Path
 	_dest: Path
 	_ignore_missing: bool
 	_read_only: bool
 
 	def __init__(self, src: os.PathLike | str, dest: os.PathLike | str | None = None) -> None:
+		"""Mount <src> in the host to <dest> inside in the sandbox."""
 		self._src = Path(src)
 		self._dest = Path(dest or src)
 		self._ignore_missing = False
@@ -158,6 +172,8 @@ type Mount = BindMount | DirectoryMount | TmpfsMount
 
 @dataclass(slots=True)
 class BWrapper:
+	"""Manipulates and builds the bwrap command incrementally."""
+
 	command: str
 	command_args: list[str]
 	workspace_dir: Path
@@ -450,6 +466,7 @@ class BWrapper:
 		return self
 
 	def add_to_path(self, path: os.PathLike | str) -> Self:
+		"""Add a path to the sandbox PATH env variable."""
 		# TODO: make this safe
 		if "PATH" not in os.environ:
 			return self
@@ -497,12 +514,14 @@ def main() -> int:
 		help="Set the working directory for the sandbox child process.",
 	)
 	argparser.add_option(
-		"--dry-run", action="store_true", help="Do not run the command. Implies --verbose.",
+		"--dry-run",
+		action="store_true",
+		help="Do not run the command. Implies --verbose.",
 	)
 
 	(options, args) = argparser.parse_args()
 	if len(args) == 0:
-		print("Missing command.")
+		argparser.error("No command specified.")
 		return 1
 	command = args[0]
 	command_args = args[1:]
@@ -520,9 +539,9 @@ def main() -> int:
 		raise RuntimeError(err_msg) from err
 
 	if options.dry_run or options.verbose:
-		print(" ".join(command))
-	# if not options.dry_run:
-	# os.execvp(command[0], command[1:])
+		sys.stdout.write(" ".join(command))
+	if not options.dry_run:
+		os.execvp(command[0], command[1:])
 	return 0
 
 
